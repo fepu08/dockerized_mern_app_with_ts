@@ -1,0 +1,89 @@
+version: "2.4"
+# version 2.x allows you to use depends_on with conditions that cause
+# v3.x doesn't have this feature yet, and is only needed if you want to use Swarm
+
+services:
+  # If you wish you can use some load balancer or reverse proxy like nginx or traefik
+  backend:
+    build:
+      context: .
+      target: dev
+    command: npm run start:dev
+    ports:
+      - 5000:5000
+    volumes:
+      - ./backend:/opt/node_app/app
+      # bind-mounting these two files in will let you add packages during development without rebuilding
+      # and then nodemon will restart. Your changes will last until you "docker-compose down" and will
+      # be saved on host for next build
+      # NOTE: this won't work on Docker Toolbox (virtualbox) which doesn't bind-mount single files
+      - ./package.json:/opt/nope_app/package.json
+      - ./package-lock.json:/opt/nope_app/package-lock.json
+      # this is a workaround to prevent host node_modules from accidently getting mounted in container
+      # in case you want to use node/npm both outside container for test/lint etc. and also inside container
+      # this will overwrite the default node_modules dir in container so it won't conflict with our
+      # /opt/node_app/node_modules location. Thanks to PR from @brnluiz
+      - notused:/opt/nope_app/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - JWT_SECRET=secret
+      - JWT_EXPIRE=30d
+      - MONGO_USERNAME=root
+      - MONGO_PASSWORD=mongo_secret
+      - MONGO_HOSTNAME=mongo
+      - MONGO_PORT=27017
+      - MONGO_DATABASE_NAME=example-database
+    healthcheck:
+      test: curl -f http://127.0.0.1:5000
+    networks:
+      - network_for_mern
+    depends_on:
+      - db:
+          - condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    volumes:
+      - ./frontend:/opt/node_app/app
+      - ./frontend/package.json:/opt/nope_app/package.json
+      - ./frontend/package-lock.json:/opt/nope_app/package-lock.json
+      - notused:/opt/nope_app/app/node_modules
+    environment:
+      # according to create react app docs: "You must create custom environment variables beginning with REACT_APP_"
+      # You must add the port you exposed to
+      - PORT
+      - REACT_APP_REST_PORT=5000
+      - REACT_APP_REST_DOMAIN=backend.localhost # must be same as traefuk route defined in the labels of backend services
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - network_for_mern
+
+  db:
+    image: "mongo:4.4"
+    restart: "always"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: mern_secret
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: '[ `echo ''db.runCommand("ping").ok'' | mongo localhost/example-database --quiet` ] && echo 0 || echo 1'
+      interval: 5s
+      start_period: 10s
+      timeout: 4s
+      retries: 3
+    networks:
+      - network_for_mern
+
+# docker-compose set up a default network between the containers, but if we want to run multiple apps in separate virtual networks we need to define the network explicitly
+networks:
+  network_for_mern:
+
+volumes:
+  notused:
